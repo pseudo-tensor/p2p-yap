@@ -9,6 +9,8 @@ use std::collections::HashMap;
 const PORT: u16 = 6767;
 const LISTENER_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 
+// TODO: inbox command to put incoming messages
+// instead of spillin everything in stdout
 pub struct Peers
 {
     pub peer_map: HashMap<String, Ipv4Addr>,
@@ -18,53 +20,58 @@ pub struct Peers
 pub async fn process_command(peers: &mut Peers, cli_input: &mut String) -> Result<bool, Box<dyn Error>>
 {
     let args = cli_input.split_once(" ");
-    
-    if let Some((cmd, arg)) = args
-    {
-        let arg = arg.trim();
-        
-        match cmd 
-        {
-            "add" => {
-                if let Some((peer_nick, addr_str)) = arg.split_once(" ")
-                {
-                    let parsed_addr = Ipv4Addr::from_str(addr_str);
-                    match parsed_addr {
-                        Ok(addr) => { peers.peer_map.insert(String::from(peer_nick), addr); },
-                        Err(e) => { eprintln!("{e}"); },
+    match args {
+        Some((cmd, arg)) => {
+            let arg = arg.trim();
+            match cmd {
+                "add" => {
+                    if let Some((peer_nick, addr_str)) = arg.split_once(" ")
+                    {
+                        let parsed_addr = Ipv4Addr::from_str(addr_str);
+                        match parsed_addr {
+                            Ok(addr) => { peers.peer_map.insert(String::from(peer_nick), addr); },
+                            Err(e) => { eprintln!("{e}"); },
+                        }
+                    }
+                    else {
+                        println!("Invalid command. Use help to see usage");
                     }
                 }
-                else {
-                    println!("Invalid command. Use --help to see usage");
-                }
+                "send" => { 
+                    match peers.channel {
+                        Some(ch) => send(ch, String::from(arg)).await?,
+                        None => println!("No Channel selected: Use channel <name_of_user> to set a channel"),
+                    }
+                },
+                "channel" => {
+                    peers.channel = Some(peers.peer_map[arg]);
+                },
+                "close" => {
+                    if arg == "channel" {
+                        peers.channel = None;
+                    }
+                    else {
+                        println!("Invalid Command: Use help");
+                    }
+                },
+                _ => println!("Invalid Command: Use help"),
             }
-            "send" => { 
-                match peers.channel {
-                    Some(ch) => send(ch, String::from(arg)).await?,
-                    None => println!("No Channel selected: Use channel <name_of_user> to set a channel"),
-                }
-            },
-            "channel" => {
-                peers.channel = Some(peers.peer_map[arg]);
-            },
-            "close" => {
-                if arg == "channel" {
-                    peers.channel = None;
-                }
-                else {
-                    println!("Invalid Command: Use --help");
-                }
-            },
-            "exit" => return Ok(true),
-            "--help" => {
-                println!("Commands:");
-                println!("send: Send message to selected channel. Usage: send <msg>");
-                println!("channel: Set channel to send messages. Usage: channel <username>");
-                println!("add: Add new channel to address book. Usage: add <username> <ipv4addr>");
-                println!("close channel: Close current channel");
-                println!("exit: Close program");
-            },
-            _ => println!("Invalid Command: Use --help"),
+        },
+        None => {
+            let cmd = cli_input.trim();
+            
+            match cmd {
+                "exit" => return Ok(true),
+                "help" => {
+                    println!("Commands:\n");
+                    println!("send: Send message to selected channel. Usage: send <msg>");
+                    println!("channel: Set channel to send messages. Usage: channel <username>");
+                    println!("add: Add new channel to address book. Usage: add <username> <ipv4addr>");
+                    println!("close channel: Close current channel");
+                    println!("exit: Close program");
+                },
+                _ => println!("Invalid Command: Use help"),
+            }
         }
     }
     
@@ -105,6 +112,5 @@ pub async fn listen() -> Result<(), Box<dyn Error>>
                 }
             }
         }
-        println!("Connection closed.");
     }
 }
