@@ -1,5 +1,5 @@
-use std::{net::Ipv4Addr, str::FromStr};
-use tokio::net::{TcpListener, TcpStream};
+use std::{net::{IpAddr, Ipv4Addr}, str::FromStr};
+use tokio::{net::{TcpListener, TcpStream}, sync::mpsc::{Receiver}};
 use tokio_util::{codec::{Framed, LinesCodec}};
 use futures::{StreamExt, SinkExt};
 use std::error::Error;
@@ -9,17 +9,60 @@ use std::collections::HashMap;
 const PORT: u16 = 6767;
 const LISTENER_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 
-// TODO: inbox command to put incoming messages
-// instead of spillin everything in stdout
 pub struct Peers
 {
     pub peer_map: HashMap<String, Ipv4Addr>,
-    pub channel: Option<Ipv4Addr>,
+    pub channel: Option<(Ipv4Addr, String)>,
 }
 
-pub async fn process_command(peers: &mut Peers, cli_input: &mut String) -> Result<bool, Box<dyn Error>>
+#[derive(Debug)]
+pub struct Inbox
+{
+    pub inbox: Vec<(IpAddr, String)>,
+}
+
+pub fn show_inbox(inbox: &mut Inbox)
+{
+    let mut it = inbox.inbox.iter();
+    while let Some((addr, msg)) = it.next()
+    {
+        println!("{addr}: {msg}");
+    }
+}
+
+/*
+* Letting OS magic handle concurrency instead of spawning
+* a new thread per connection request since the connections 
+* last for a very short duration
+*/
+pub async fn listen(rx: &mut Receiver<&str>, inbox: &mut Inbox) -> Result<(), Box<dyn Error>>
+{
+    let stream = TcpListener::bind((LISTENER_ADDR, PORT)).await?;
+    
+    loop {
+        // some concurrency bullshit here with two awaits
+        if let Some(message) = rx.recv().await {
+            if message == "show"
+            {
+                show_inbox(inbox);
+            }
+        }
+        let (socket, addr) = stream.accept().await?;
+        let mut framed = Framed::new(socket, LinesCodec::new());
+        
+        while let Some(result) = framed.next().await {
+            match result {
+                Ok(line) => inbox.inbox.push((addr.ip(), line)),
+                Err(_) => {},
+            }
+        }
+    }
+}
+
+pub async fn process_command(peers: &mut Peers, cli_input: &mut String) -> Result<(bool, bool), Box<dyn Error>>
 {
     let args = cli_input.split_once(" ");
+    let mut tx_flag = false;
     match args {
         Some((cmd, arg)) => {
             let arg = arg.trim();
@@ -29,7 +72,7 @@ pub async fn process_command(peers: &mut Peers, cli_input: &mut String) -> Resul
                     {
                         let parsed_addr = Ipv4Addr::from_str(addr_str);
                         match parsed_addr {
-                            Ok(addr) => { peers.peer_map.insert(String::from(peer_nick), addr); },
+                            Ok(addr) => { let _ = &peers.peer_map.insert(String::from(peer_nick), addr); },
                             Err(e) => { eprintln!("{e}"); },
                         }
                     }
@@ -38,13 +81,13 @@ pub async fn process_command(peers: &mut Peers, cli_input: &mut String) -> Resul
                     }
                 }
                 "send" => { 
-                    match peers.channel {
-                        Some(ch) => send(ch, String::from(arg)).await?,
+                    match &peers.channel {
+                        Some(ch) => send(ch.0, String::from(arg)).await?,
                         None => println!("No Channel selected: Use channel <name_of_user> to set a channel"),
                     }
                 },
                 "channel" => {
-                    peers.channel = Some(peers.peer_map[arg]);
+                    peers.channel = Some((peers.peer_map[arg], String::from(arg)));
                 },
                 "close" => {
                     if arg == "channel" {
@@ -61,7 +104,8 @@ pub async fn process_command(peers: &mut Peers, cli_input: &mut String) -> Resul
             let cmd = cli_input.trim();
             
             match cmd {
-                "exit" => return Ok(true),
+                "inbox" => tx_flag = true,
+                "exit" => return Ok((true, tx_flag)),
                 "help" => {
                     println!("Commands:\n");
                     println!("send: Send message to selected channel. Usage: send <msg>");
@@ -75,42 +119,22 @@ pub async fn process_command(peers: &mut Peers, cli_input: &mut String) -> Resul
         }
     }
     
-    Ok(false)
+    Ok((false, tx_flag))
 }
 
 pub async fn send(dest: Ipv4Addr, msg: String) -> Result<(), Box<dyn Error>>
 {
-    let stream = TcpStream::connect((dest, PORT)).await?;
-    let mut framed_conn = Framed::new(stream, LinesCodec::new());
-
-    framed_conn.send(msg).await?;
-    Ok(())
-}
-
-/*
-* Letting OS magic handle concurrency instead of spawning
-* a new thread per connection request since the connections 
-* last for a very short duration
-*/
-pub async fn listen() -> Result<(), Box<dyn Error>>
-{
-    let stream = TcpListener::bind((LISTENER_ADDR, PORT)).await?;
-    
-    loop {
-        let (socket, addr) = stream.accept().await?;
-        let mut framed = Framed::new(socket, LinesCodec::new());
-        
-        while let Some(result) = framed.next().await {
-            match result {
-                Ok(line) => {
-                    // Print user nick instead of addr here
-                    println!("{addr}: {line}");
-                }
-                Err(e) => {
-                    eprintln!("{e}");
-                    break;
-                }
+    let res_stream = TcpStream::connect((dest, PORT)).await;
+    match res_stream {
+        Ok(stream) => {
+            let mut framed_conn = Framed::new(stream, LinesCodec::new());
+            let res = framed_conn.send(msg).await;
+            match res {
+                Ok(()) => {},
+                Err(_) => {println!("Failed to send message");},
             }
-        }
+        },
+        Err(_) => println!("Failed to connect to client (User might be offline)"),
     }
+    Ok(())
 }
