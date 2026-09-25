@@ -1,10 +1,10 @@
 mod peers;
 
 use std::{
-    collections::HashMap, error::Error, io::Write,
+    collections::HashMap,
+    error::Error,
 };
-use tokio::sync::mpsc;
-
+use tokio::sync::{mpsc, oneshot};
 use crate::peers::*;
 
 #[tokio::main]
@@ -19,9 +19,8 @@ async fn main() -> Result<(), Box<dyn Error>>
         inbox: vec![],
     };
     
-    let (tx, mut rx) = mpsc::channel(32);
+    let (tx, mut rx) = mpsc::channel::<Command>(32);
     
-    // Listener only thread
     tokio::spawn(async move {
         let _ = listen(&mut rx, &mut inbox).await;
     });
@@ -38,22 +37,29 @@ async fn main() -> Result<(), Box<dyn Error>>
             None => user_nick = String::from(""),
         }
         
+        /*
+         * Listen thread took longer to receive the message than this block finished 
+         * and process_command started execution;
+         * 
+         * Now it is blocked until the confirmation arrives
+         */
         if tx_flag
         {
-            let res = tx.send("show").await;
+            let (ack_tx, ack_rx) = oneshot::channel();
+            let cmd = Command {
+                show: true,
+                respond_to: ack_tx,
+            };
+            let res = tx.send(cmd).await;
+            // should be a shorthand for this
             match res {
                 Ok(()) => {},
-                Err(_) => println!("Internal Error, pls try again"),
+                Err(_) => {},
             }
+            ack_rx.await?;
         }
         
-        print!("[{user_nick}]> ");
-        let _ = std::io::stdout().flush();
-        let mut buf = String::new();
-        
-        // PONDER: Possibility of injection here?
-        let _ = std::io::stdin().read_line(&mut buf)?;
-        (exit_flag, tx_flag) = process_command(&mut peers, &mut buf).await?;
+        (exit_flag, tx_flag) = process_command(&mut peers, &user_nick).await?;
     }
 
     Ok(())
