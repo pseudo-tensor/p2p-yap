@@ -35,11 +35,6 @@ pub fn show_inbox(inbox: &mut Inbox)
     }
 }
 
-/*
-* Letting OS magic handle concurrency instead of spawning
-* a new thread per connection request since the connections 
-* last for a very short duration
-*/
 pub async fn listen(rx: &mut Receiver<Command>, inbox: &mut Inbox) -> Result<(), Box<dyn Error>>
 {
     let stream = TcpListener::bind((LISTENER_ADDR, PORT)).await?;
@@ -89,7 +84,7 @@ pub async fn send(dest: Ipv4Addr, msg: String) -> Result<(), Box<dyn Error>>
         },
         Err(_) => println!("Failed to connect to client (User might be offline)"),
     }
-    Ok(())
+    return Ok(());
 }
 
 pub async fn process_command(peers: &mut Peers, peer_nick: &String) -> Result<(bool, bool), Box<dyn Error>>
@@ -104,7 +99,7 @@ pub async fn process_command(peers: &mut Peers, peer_nick: &String) -> Result<(b
     let args = buf.split_once(" ");
     let mut tx_flag = false;
     match args {
-        // TODO: Add list channels command
+        // cmd with args here
         Some((cmd, arg)) => {
             let arg = arg.trim();
             match cmd {
@@ -123,6 +118,19 @@ pub async fn process_command(peers: &mut Peers, peer_nick: &String) -> Result<(b
                         println!("Invalid command. Use help to see usage");
                     }
                 }
+                "list" => {
+                    if arg == "channels" {
+                        let mut it = peers.peer_map.iter();
+                        println!("Added users:");
+                        while let Some((k,_)) = it.next()
+                        {
+                            println!("{k}");
+                        }
+                    }
+                    else {
+                        println!("Invalid Command: Use help");
+                    }
+                },
                 "send" => { 
                     match &peers.channel {
                         Some(ch) => {
@@ -132,8 +140,14 @@ pub async fn process_command(peers: &mut Peers, peer_nick: &String) -> Result<(b
                     }
                 },
                 "channel" => {
-                    // add more safe parsing here
-                    peers.channel = Some((peers.peer_map[arg], String::from(arg)));
+                    if !peers.peer_map.contains_key(arg) 
+                    {
+                        println!("Channel does not exist");
+                    }
+                    else
+                    {
+                        peers.channel = Some((peers.peer_map[arg], String::from(arg)));
+                    }
                 },
                 "close" => {
                     if arg == "channel" {
@@ -150,15 +164,17 @@ pub async fn process_command(peers: &mut Peers, peer_nick: &String) -> Result<(b
             let cmd = buf.trim();
             
             match cmd {
+                "" => {},
                 "inbox" => tx_flag = true,
                 "exit" => return Ok((true, tx_flag)),
                 "help" => {
                     println!("Commands:\n");
-                    println!("send: Send message to selected channel. Usage: send <msg>");
-                    println!("channel: Set channel to send messages. Usage: channel <username>");
-                    println!("add: Add new channel to address book. Usage: add <username> <ipv4addr>");
-                    println!("close channel: Close current channel");
-                    println!("exit: Close program");
+                    println!("add:              Add new channel to address book. Usage: add <username> <ipv4addr>");
+                    println!("channel:          Set channel to send messages. Usage: channel <username>");
+                    println!("close channel:    Close current channel");
+                    println!("list channels:    List all saved channels");
+                    println!("send:             Send message to selected channel. Usage: send <msg>");
+                    println!("exit:             Close program");
                 },
                 _ => println!("Invalid Command: Use help"),
             }

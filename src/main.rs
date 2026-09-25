@@ -50,17 +50,12 @@ async fn main() -> Result<(), Box<dyn Error>>
                 show: true,
                 respond_to: ack_tx,
             };
-            let res = tx.send(cmd).await;
-            // should be a shorthand for this
-            match res {
-                Ok(()) => {},
-                Err(_) => {},
-            }
+            let _ = tx.send(cmd).await;
             ack_rx.await?;
         }
         
         (exit_flag, tx_flag) = process_command(&mut peers, &user_nick).await?;
     }
 
-    Ok(())
+    return Ok(());
 }
